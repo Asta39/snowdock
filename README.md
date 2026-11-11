@@ -36,6 +36,18 @@ Signed + notarized build (needs an Apple Developer account):
 SIGN_ID="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=snowdock ./build-dmg.sh
 ```
 
+## Snowflakes (Blender)
+
+The crystals are real 3D models generated in Blender: dendrites, stellar plates, sectored plates and hexagonal plates, six-fold symmetric, shaded as translucent ice (IOR 1.31) and rendered top-down with transparent backgrounds into `Resources/flakes/`. The app loads those PNGs and falls back to procedural crystals if they're missing.
+
+Regenerate (about 40 s on an M2):
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender -b -P blender/make_flakes.py -- --out Resources/flakes --count 8 --size 256 --samples 64
+```
+
+Open `blender/flakes.blend` to tweak the models by hand.
+
 ## How tilt works
 
 Apple Silicon MacBooks have an accelerometer and gyro behind the Sensor Processing Unit (SPU) that macOS doesn't expose publicly. SnowDock switches the SPU sensors on through IOKit (`AppleSPUHIDDriver` properties), reads ~200 Hz accelerometer reports over HID, low-pass filters them to get the gravity direction, and uses the sideways component to drive a sand-pile simulation on the Dock. Sharp spikes count as a shake.
@@ -50,7 +62,6 @@ swiftc -O tools/probe.swift -o probe && ./probe
 
 ## Roadmap
 
-- Blender-rendered crystal flakes
 - GPU compute simulation (50k+ flakes) and true depth-of-field blur
 - Snow on window title bars
 - Lid-angle fallback for Macs without an accelerometer

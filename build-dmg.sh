@@ -7,6 +7,7 @@ swiftc -O -target arm64-apple-macos13  Sources/SnowDock.swift -o build/SnowDock-
 swiftc -O -target x86_64-apple-macos13 Sources/SnowDock.swift -o build/SnowDock-x86_64
 lipo -create build/SnowDock-arm64 build/SnowDock-x86_64 -output build/SnowDock.app/Contents/MacOS/SnowDock
 cp packaging/Info.plist build/SnowDock.app/Contents/
+cp -R Resources/flakes build/SnowDock.app/Contents/Resources/
 [[ -f packaging/AppIcon.icns ]] && cp packaging/AppIcon.icns build/SnowDock.app/Contents/Resources/ && \
   /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" build/SnowDock.app/Contents/Info.plist
 # Ad-hoc sign by default; set SIGN_ID="Developer ID Application: ..." for a distributable build
