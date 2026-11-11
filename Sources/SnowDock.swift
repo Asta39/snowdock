@@ -122,6 +122,8 @@ struct Flake {
     var spin: CGFloat = .random(in: -1.5...1.5)
     var kind: Int = .random(in: 0..<Sprites.count)
     var depth: CGFloat = 1                               // 0 far ... 1 near
+    var forceNear = false                                // extra front-layer flake (always respawns near)
+    var catchesWindows = false                           // only some flakes settle on window tops; the rest fall past to the Dock
 }
 
 // MARK: - Crystal sprites (procedural six-fold dendrites, pre-rendered once)
@@ -235,15 +237,24 @@ final class SnowSim {
     init(bounds: CGRect, count: Int) {
         self.bounds = bounds
         flakes = (0..<count).map { _ in spawn(y: .random(in: 0...bounds.height)) }
+        // +30% front-layer flakes so drifts build up
+        let near = flakes.filter { $0.depth > 0.3 }.count
+        flakes += (0..<Int(Double(near) * 0.3)).map { _ in spawn(y: .random(in: 0...bounds.height), near: true) }
     }
 
-    func spawn(y: CGFloat? = nil) -> Flake {
+    /// Share of near flakes that may settle on window tops. Kept low so a maximised
+    /// window at the top of the screen doesn't catch everything before the Dock.
+    let windowCatchRate = 0.15
+
+    func spawn(y: CGFloat? = nil, near: Bool = false) -> Flake {
         // depth: most flakes far away, few close; size + speed scale with depth (parallax)
-        let d = pow(CGFloat.random(in: 0...1), 1.8)
+        let d = near ? CGFloat.random(in: 0.3...1) : pow(CGFloat.random(in: 0...1), 1.8)
         let r = 1.0 + d * 4.5 + .random(in: 0...0.6)
         var f = Flake(p: CGPoint(x: .random(in: -50...bounds.width + 50), y: y ?? bounds.height + 10),
                       v: CGVector(dx: 0, dy: -(9 + r * 5)), r: r, phase: .random(in: 0...6.28))
         f.depth = d
+        f.forceNear = near
+        f.catchesWindows = Double.random(in: 0...1) < windowCatchRate
         return f
     }
 
@@ -327,7 +338,7 @@ final class SnowSim {
                 for li in ledges.indices {
                     let L = ledges[li]
                     let col = Int((f.p.x - L.rect.minX) / cell)
-                    guard col >= 0 && col < L.height.count && !L.mask[col] else { continue }
+                    guard col >= 0 && col < L.height.count && !L.mask[col] && (L.isDock || f.catchesWindows) else { continue }
                     let surf = L.top + L.height[col]
                     if prevY >= surf - 1 && f.p.y <= surf && (best == nil || surf > best!.y) { best = (li, col, surf) }
                 }
@@ -336,7 +347,7 @@ final class SnowSim {
                     landed = true
                 }
             }
-            if landed || f.p.y < -10 || f.p.x < -80 || f.p.x > bounds.width + 80 { f = spawn() }
+            if landed || f.p.y < -10 || f.p.x < -80 || f.p.x > bounds.width + 80 { f = spawn(near: f.forceNear) }
             flakes[i] = f
         }
 
@@ -397,6 +408,8 @@ final class SnowSim {
         guard let i = flakes.indices.min(by: { flakes[$0].p.y > flakes[$1].p.y }) else { return }
         var f = Flake(p: p, v: v, r: .random(in: 2...4.5), phase: .random(in: 0...6.28))
         f.depth = 0.6; f.spin = .random(in: -6...6)
+        f.forceNear = flakes[i].forceNear
+        f.catchesWindows = false                         // spilled snow falls on to the Dock
         flakes[i] = f
     }
 
