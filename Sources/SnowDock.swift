@@ -6,6 +6,7 @@ import MetalKit
 import IOKit
 import IOKit.hid
 import ApplicationServices
+import ImageIO
 
 // MARK: - Motion sensor (Apple Silicon SPU accelerometer)
 
@@ -127,8 +128,28 @@ struct Flake {
 
 enum Sprites {
     static let count = 8
-    static let px = 96
-    static let crystals: [CGImage] = (0..<count).map { make(seed: $0) }
+    static let px = 128
+    /// Blender-rendered crystals (Resources/flakes/flake_N.png), falling back to procedural ones.
+    static let crystals: [CGImage] = (0..<count).map { loadRendered($0) ?? make(seed: $0) }
+    static var usingRendered: Bool { loadRendered(0) != nil }
+
+    private static let flakeDirs: [URL] = {
+        var dirs: [URL] = []
+        if let r = Bundle.main.resourceURL { dirs.append(r.appendingPathComponent("flakes")) }
+        let exe = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+        dirs.append(exe.appendingPathComponent("Resources/flakes"))
+        dirs.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources/flakes"))
+        return dirs
+    }()
+
+    private static func loadRendered(_ i: Int) -> CGImage? {
+        for d in flakeDirs {
+            let u = d.appendingPathComponent("flake_\(i).png")
+            if let src = CGImageSourceCreateWithURL(u as CFURL, nil),
+               let img = CGImageSourceCreateImageAtIndex(src, 0, nil) { return img }
+        }
+        return nil
+    }
     static let glow: CGImage = {
         let ctx = bitmap()
         let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
