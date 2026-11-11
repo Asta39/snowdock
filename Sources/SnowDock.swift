@@ -221,7 +221,8 @@ struct Ledge {
     var rect: CGRect               // view coords; snow sits on rect.maxY
     var height: [CGFloat]
     var mask: [Bool]               // true = column covered by a window in front (no snow)
-    var maxPile: CGFloat
+    var maxPile: CGFloat           // melt trigger: when the drift reaches this, it melts away
+    var melting = false
     var top: CGFloat { rect.maxY }
     var isDock: Bool { id == -1 }
 }
@@ -264,8 +265,10 @@ final class SnowSim {
     /// a moved or closed window sheds its snow as falling clumps.
     func sync(dock: CGRect, windows: [(id: Int, rect: CGRect)]) {
         var wanted: [(Int, CGRect, CGFloat)] = []
-        if dock.width > 0 { wanted.append((-1, CGRect(x: dock.minX, y: dock.minY, width: dock.width, height: dock.height - 2), 16)) }
-        for w in windows { wanted.append((w.id, w.rect, 10)) }
+        let dockTrigger = bounds.height * 0.10              // Dock drift melts once it reaches 10% of screen height
+        let windowTrigger = max(bounds.height * 0.02, 12)  // window tops: smaller, so content stays visible
+        if dock.width > 0 { wanted.append((-1, CGRect(x: dock.minX, y: dock.minY, width: dock.width, height: dock.height - 2), dockTrigger)) }
+        for w in windows { wanted.append((w.id, w.rect, windowTrigger)) }
 
         var next: [Ledge] = []
         for (id, rect, cap) in wanted {
@@ -284,6 +287,7 @@ final class SnowSim {
                     old.height = nh
                 }
                 old.rect = rect
+                old.maxPile = cap
                 old.mask = Array(repeating: false, count: n)
                 next.append(old)
             } else {
@@ -353,11 +357,17 @@ final class SnowSim {
 
         for li in ledges.indices {
             relax(li, tilt: tilt)
+            // No melt over time. A drift only melts once it reaches its trigger height
+            // (or from the menu); then it melts down completely over ~6 s.
             let cap = ledges[li].maxPile
+            let peak = ledges[li].height.max() ?? 0
+            if !ledges[li].melting && peak >= cap { ledges[li].melting = true }
+            let rate = ledges[li].melting ? max(peak, 4) / 6 : 0
             for c in ledges[li].height.indices {
                 let h = ledges[li].height[c]
-                ledges[li].height[c] = ledges[li].mask[c] ? 0 : min(max(h - dt * (0.05 + h * 0.004), 0), cap)  // slow melt
+                ledges[li].height[c] = ledges[li].mask[c] ? 0 : min(max(h - dt * rate, 0), cap)
             }
+            if ledges[li].melting && peak < 0.3 { ledges[li].melting = false }
         }
     }
 
@@ -443,10 +453,16 @@ final class SnowSim {
         }
     }
 
+    /// Start melting every drift (menu action).
+    func meltAll() { for li in ledges.indices { ledges[li].melting = true } }
+
+    /// Remove all settled snow instantly (menu action).
+    func clearAll() { for li in ledges.indices { ledges[li].height = ledges[li].height.map { _ in 0 }; ledges[li].melting = false } }
+
     func fill() {
         for li in ledges.indices {
             for c in ledges[li].height.indices where !ledges[li].mask[c] {
-                ledges[li].height[c] = ledges[li].maxPile * 0.8 + .random(in: 0...2)
+                ledges[li].height[c] = min(ledges[li].maxPile * 0.5, 40) + .random(in: 0...2)
             }
         }
     }
@@ -721,6 +737,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Invert tilt", action: #selector(invert), keyEquivalent: "i")
         menu.addItem(withTitle: "Shake now", action: #selector(shake), keyEquivalent: "s")
         menu.addItem(withTitle: "Dump snow on Dock + windows", action: #selector(fill), keyEquivalent: "f")
+        menu.addItem(withTitle: "Melt snow", action: #selector(melt), keyEquivalent: "m")
+        menu.addItem(withTitle: "Clear snow now", action: #selector(clear), keyEquivalent: "x")
         menu.addItem(withTitle: "Toggle HUD", action: #selector(hud), keyEquivalent: "h")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -742,6 +760,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func cycleAxis() { Motion.shared.axis = (Motion.shared.axis + 1) % 3 }
     @objc func invert() { Motion.shared.sign *= -1 }
     @objc func shake() { view.sim.shake(strength: 1.5) }
+    @objc func melt() { view.sim.meltAll() }
+    @objc func clear() { view.sim.clearAll() }
     @objc func fill() { view.sim.fill() }
     @objc func hud() { view.showHUD.toggle() }
 }

@@ -38,7 +38,7 @@ When SnowDock asks for **Accessibility** access, allow it. It only uses this to 
 | | |
 |---|---|
 | ❄️ **Real crystals** | Dendrites, stellar plates, sectored and hex plates, modelled as 3D meshes in Blender and rendered as translucent ice |
-| 🏔 **Snow that piles up** | Flakes settle on the Dock and on top of your windows, build into drifts, melt slowly and spill off the ends |
+| 🏔 **Snow that piles up** | Flakes settle on the Dock and on top of your windows, build into drifts and spill off the ends. Snow never melts on its own: a drift melts away once it reaches 10% of the screen height, or when you tilt, shake or melt it from the menu |
 | 🪟 **Window snow** | Drag a window and its snow slides off; close it and the snow falls. Windows in front hide the snow behind them |
 | 📐 **Tilt physics** | Tilt your MacBook and the drift slides downhill and pours off the edge |
 | 💥 **Shake** | Knock the laptop and the snow flies up |
@@ -46,7 +46,7 @@ When SnowDock asks for **Accessibility** access, allow it. It only uses this to 
 | ⚡️ **Light** | Drawn with Metal, using about 5% of one CPU core |
 | 🖱 **Click-through** | Never gets in the way of your mouse or windows |
 
-The ❄︎ menu bar item has **Calibrate flat**, **Cycle tilt axis**, **Invert tilt**, **Shake now**, **Dump snow on Dock + windows**, **Toggle HUD** and **Quit**.
+The ❄︎ menu bar item has **Calibrate flat**, **Cycle tilt axis**, **Invert tilt**, **Shake now**, **Dump snow on Dock + windows**, **Melt snow**, **Clear snow now**, **Toggle HUD** and **Quit**.
 
 ## Requirements
 
