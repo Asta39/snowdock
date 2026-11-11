@@ -17,6 +17,9 @@
 
 ## Install
 
+The disk image opens to a snowy-night install window: drag SnowDock onto Applications.
+
+
 **One line (recommended):** paste into Terminal:
 
 ```bash
@@ -31,7 +34,7 @@ This downloads the latest release, copies SnowDock to `/Applications` and opens 
 2. Open it and drag **SnowDock** onto **Applications**. Drag it yourself rather than letting a "move to Applications" helper do it.
 3. The first time you open it, macOS blocks it because SnowDock isn't notarized yet. Go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**, then confirm.
 
-When SnowDock asks for **Accessibility** access, allow it. It only uses this to measure the Dock so the snow lands in the right place.
+When SnowDock asks for **Accessibility** access, allow it. It only uses this to measure the Dock exactly, so the snow covers the whole Dock and follows it as it grows and shrinks. Without it, SnowDock estimates the Dock's size from your Dock settings and open apps. You can grant it later from **❄︎ → Fit snow to Dock**.
 
 ## Features
 
@@ -39,6 +42,7 @@ When SnowDock asks for **Accessibility** access, allow it. It only uses this to 
 |---|---|
 | ❄️ **Real crystals** | Dendrites, stellar plates, sectored and hex plates, modelled as 3D meshes in Blender and rendered as translucent ice |
 | 🏔 **Snow that piles up** | Flakes settle on the Dock and on top of your windows, build into drifts and spill off the ends. Snow never melts on its own: a drift melts away once it reaches 10% of the screen height, or when you tilt, shake or melt it from the menu |
+| 📏 **Fits your Dock** | The landing area tracks the Dock's real size every second as apps open and close |
 | 🪟 **Window snow** | Drag a window and its snow slides off; close it and the snow falls. Windows in front hide the snow behind them |
 | 📐 **Tilt physics** | Tilt your MacBook and the drift slides downhill and pours off the edge |
 | 💥 **Shake** | Knock the laptop and the snow flies up |

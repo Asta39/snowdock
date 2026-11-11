@@ -85,13 +85,27 @@ enum Dock {
         let f = screen.frame, v = screen.visibleFrame
         let height = max(v.minY - f.minY, 0)
         guard height > 4 else { return .zero }           // dock hidden or on the side
-        if let r = axDockRect(screen: screen) { return r }
+        if let r = axDockRect(screen: screen) { return r.insetBy(dx: -6, dy: 0) }   // include the Dock's glass padding
+        return estimate(screen: screen, height: height)
+    }
+
+    static var trusted: Bool { AXIsProcessTrusted() }
+
+    /// Without Accessibility: count Dock items from its prefs + running apps.
+    /// Measured on macOS: each item is ~1 tile wide; the Dock shrinks tiles to fit the screen.
+    private static func estimate(screen: NSScreen, height: CGFloat) -> NSRect {
+        let f = screen.frame
         let d = UserDefaults(suiteName: "com.apple.dock")
         let tile = CGFloat(d?.double(forKey: "tilesize") ?? 48).clamped(16, 128)
-        let apps = (d?.array(forKey: "persistent-apps")?.count ?? 8) + (d?.array(forKey: "persistent-others")?.count ?? 0)
-        let running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.count
-        let items = CGFloat(max(apps, running) + 2)       // + Finder + Trash
-        let w = min(items * tile * 1.12 + 24, f.width - 40)
+        let pinned = (d?.array(forKey: "persistent-apps") as? [[String: Any]] ?? []).compactMap {
+            ($0["tile-data"] as? [String: Any])?["bundle-identifier"] as? String
+        }
+        let others = d?.array(forKey: "persistent-others")?.count ?? 0
+        let running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.compactMap(\.bundleIdentifier)
+        let apps = Set(pinned).union(running).union(["com.apple.finder"]).count
+        let showRecents = d?.object(forKey: "show-recents") as? Bool ?? true
+        let items = CGFloat(apps + others + 1 + (showRecents ? 3 : 0)) + 0.5   // + Trash, + separator
+        let w = min(items * tile + 12, f.width - 16)
         return NSRect(x: (f.width - w) / 2, y: 0, width: w, height: height)
     }
 
@@ -708,6 +722,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var view: SnowView!
     var status: NSStatusItem!
     var dock: CGRect = .zero
+    var axItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ n: Notification) {
         guard let screen = NSScreen.main else { return }
@@ -739,6 +754,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Dump snow on Dock + windows", action: #selector(fill), keyEquivalent: "f")
         menu.addItem(withTitle: "Melt snow", action: #selector(melt), keyEquivalent: "m")
         menu.addItem(withTitle: "Clear snow now", action: #selector(clear), keyEquivalent: "x")
+        let ax = menu.addItem(withTitle: "Fit snow to Dock (grant Accessibility)…", action: #selector(grantAX), keyEquivalent: "")
+        ax.isHidden = Dock.trusted
+        axItem = ax
         menu.addItem(withTitle: "Toggle HUD", action: #selector(hud), keyEquivalent: "h")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -751,7 +769,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self, let sc = NSScreen.main else { return }
             tick += 1
-            if tick % 8 == 0 || self.dock == .zero { self.dock = Dock.shelf(screen: sc) }   // AX query is slower; every 2 s
+            if tick % 4 == 0 || self.dock == .zero { self.dock = Dock.shelf(screen: sc) }   // AX query is slower; every 1 s
+            self.axItem?.isHidden = Dock.trusted
             self.view.sim.sync(dock: self.dock, windows: Windows.list(screen: sc))
         }
     }
@@ -760,6 +779,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func cycleAxis() { Motion.shared.axis = (Motion.shared.axis + 1) % 3 }
     @objc func invert() { Motion.shared.sign *= -1 }
     @objc func shake() { view.sim.shake(strength: 1.5) }
+    @objc func grantAX() {
+        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
     @objc func melt() { view.sim.meltAll() }
     @objc func clear() { view.sim.clearAll() }
     @objc func fill() { view.sim.fill() }
