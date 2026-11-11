@@ -38,14 +38,15 @@ When SnowDock asks for **Accessibility** access, allow it. It only uses this to 
 | | |
 |---|---|
 | ❄️ **Real crystals** | Dendrites, stellar plates, sectored and hex plates, modelled as 3D meshes in Blender and rendered as translucent ice |
-| 🏔 **Snow that piles up** | Flakes settle on the Dock, build into drifts, melt over time and spill off the ends |
+| 🏔 **Snow that piles up** | Flakes settle on the Dock and on top of your windows, build into drifts, melt slowly and spill off the ends |
+| 🪟 **Window snow** | Drag a window and its snow slides off; close it and the snow falls. Windows in front hide the snow behind them |
 | 📐 **Tilt physics** | Tilt your MacBook and the drift slides downhill and pours off the edge |
 | 💥 **Shake** | Knock the laptop and the snow flies up |
 | 🌌 **Depth** | Far flakes are soft and slow, near flakes are sharp and tumble as they fall |
 | ⚡️ **Light** | Drawn with Metal, using about 5% of one CPU core |
 | 🖱 **Click-through** | Never gets in the way of your mouse or windows |
 
-The ❄︎ menu bar item has **Calibrate flat**, **Cycle tilt axis**, **Invert tilt**, **Shake now**, **Dump snow on Dock**, **Toggle HUD** and **Quit**.
+The ❄︎ menu bar item has **Calibrate flat**, **Cycle tilt axis**, **Invert tilt**, **Shake now**, **Dump snow on Dock + windows**, **Toggle HUD** and **Quit**.
 
 ## Requirements
 
@@ -128,7 +129,6 @@ Quit it from ❄︎ and drag `/Applications/SnowDock.app` to the Trash.
 ## Roadmap
 
 - [ ] Notarized builds
-- [ ] Snow on window title bars
 - [ ] Settings panel (density, wind, melt speed)
 - [ ] GPU simulation with 50k+ flakes and real depth-of-field blur
 - [ ] Lid-angle fallback for Macs without an accelerometer

@@ -213,19 +213,27 @@ struct SeededRNG: RandomNumberGenerator {
     mutating func next() -> UInt64 { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s }
 }
 
+/// A surface snow can settle on: the Dock or the top edge of a window.
+struct Ledge {
+    let id: Int                    // -1 = Dock, otherwise CGWindowNumber
+    var rect: CGRect               // view coords; snow sits on rect.maxY
+    var height: [CGFloat]
+    var mask: [Bool]               // true = column covered by a window in front (no snow)
+    var maxPile: CGFloat
+    var top: CGFloat { rect.maxY }
+    var isDock: Bool { id == -1 }
+}
+
 final class SnowSim {
     let cell: CGFloat = 3
     var bounds: CGRect
-    var shelf: CGRect
     var flakes: [Flake] = []
-    var height: [CGFloat] = []                           // pile height per column across the shelf
+    var ledges: [Ledge] = []
     var wind: CGFloat = 0
     var t: CGFloat = 0
-    let maxPile: CGFloat = 16
 
-    init(bounds: CGRect, shelf: CGRect, count: Int) {
-        self.bounds = bounds; self.shelf = shelf
-        height = Array(repeating: 0, count: max(Int(shelf.width / cell), 1))
+    init(bounds: CGRect, count: Int) {
+        self.bounds = bounds
         flakes = (0..<count).map { _ in spawn(y: .random(in: 0...bounds.height)) }
     }
 
@@ -239,116 +247,222 @@ final class SnowSim {
         return f
     }
 
-    var pileTop: CGFloat { shelf.maxY - 2 }             // snow sits on top of the dock shelf
+    // MARK: ledge sync
+
+    /// Replace the set of surfaces. Ledges keep their snow if they didn't move;
+    /// a moved or closed window sheds its snow as falling clumps.
+    func sync(dock: CGRect, windows: [(id: Int, rect: CGRect)]) {
+        var wanted: [(Int, CGRect, CGFloat)] = []
+        if dock.width > 0 { wanted.append((-1, CGRect(x: dock.minX, y: dock.minY, width: dock.width, height: dock.height - 2), 16)) }
+        for w in windows { wanted.append((w.id, w.rect, 10)) }
+
+        var next: [Ledge] = []
+        for (id, rect, cap) in wanted {
+            let n = max(Int(rect.width / cell), 1)
+            if var old = ledges.first(where: { $0.id == id }) {
+                let moved = abs(old.rect.minX - rect.minX) > 2 || abs(old.rect.maxY - rect.maxY) > 2
+                if moved && id != -1 {
+                    shed(old, fraction: 1)                // window dragged: snow slides off
+                    old.height = Array(repeating: 0, count: n)
+                } else if moved || n != old.height.count {
+                    var nh = Array(repeating: CGFloat(0), count: n)
+                    for (i, h) in old.height.enumerated() {
+                        let j = Int((old.rect.minX + CGFloat(i) * cell - rect.minX) / cell)
+                        if j >= 0 && j < n { nh[j] = h }
+                    }
+                    old.height = nh
+                }
+                old.rect = rect
+                old.mask = Array(repeating: false, count: n)
+                next.append(old)
+            } else {
+                next.append(Ledge(id: id, rect: rect, height: Array(repeating: 0, count: n), mask: Array(repeating: false, count: n), maxPile: cap))
+            }
+        }
+        for gone in ledges where !next.contains(where: { $0.id == gone.id }) { shed(gone, fraction: 0.6) }
+
+        // occlusion: windows are front-to-back in `windows`; a column is hidden
+        // if any window in front of this ledge's window covers its top edge.
+        let order = windows.map(\.id)
+        for li in next.indices {
+            let L = next[li]
+            let myZ = L.isDock ? -1 : (order.firstIndex(of: L.id) ?? Int.max)
+            let front = L.isDock ? [] : windows.prefix(max(myZ, 0)).map(\.rect)
+            for c in L.height.indices {
+                let p = CGPoint(x: L.rect.minX + (CGFloat(c) + 0.5) * cell, y: L.top + 1)
+                if front.contains(where: { $0.contains(p) }) { next[li].mask[c] = true; next[li].height[c] = 0 }
+            }
+        }
+        ledges = next
+    }
+
+    private func shed(_ L: Ledge, fraction: CGFloat) {
+        var budget = 40
+        for (i, h) in L.height.enumerated() where h > 1 && budget > 0 && Int.random(in: 0..<4) == 0 {
+            budget -= 1
+            launch(at: CGPoint(x: L.rect.minX + CGFloat(i) * cell, y: L.top + h * fraction),
+                   v: CGVector(dx: .random(in: -40...40), dy: .random(in: -20...30)))
+        }
+    }
+
+    // MARK: step
 
     func step(dt: CGFloat, tilt: CGFloat) {
         t += dt
         wind = sin(t * 0.13) * 14 + sin(t * 0.41) * 6
 
-        // Falling flakes
         for i in flakes.indices {
             var f = flakes[i]
+            let prevY = f.p.y
             let sway = sin(t * 1.7 + f.phase) * (6 + f.r * 2)
-            // gravity follows tilt a little so the whole snowfall leans
             f.v.dx += ((wind + sway + tilt * 220) - f.v.dx) * min(dt * 2, 1)
             f.v.dy += (-(9 + f.r * 5) - f.v.dy) * min(dt * 1.5, 1)
             f.p.x += f.v.dx * dt; f.p.y += f.v.dy * dt
             f.rot += (f.spin + f.v.dx * 0.004) * dt
 
-            // only mid/near flakes land on the Dock; far ones fall "behind" it
-            let col = Int((f.p.x - shelf.minX) / cell)
-            if f.depth > 0.3 && col >= 0 && col < height.count && f.p.y <= pileTop + height[col] && f.v.dy < 0 && f.p.y > shelf.minY {
-                deposit(col: col, amount: f.r * f.r * 0.035)
-                f = spawn()
-            } else if f.p.y < -10 || f.p.x < -80 || f.p.x > bounds.width + 80 {
-                f = spawn()
+            // land on the highest surface crossed this frame (far flakes fall "behind")
+            var landed = false
+            if f.depth > 0.3 && f.v.dy < 0 {
+                var best: (li: Int, col: Int, y: CGFloat)?
+                for li in ledges.indices {
+                    let L = ledges[li]
+                    let col = Int((f.p.x - L.rect.minX) / cell)
+                    guard col >= 0 && col < L.height.count && !L.mask[col] else { continue }
+                    let surf = L.top + L.height[col]
+                    if prevY >= surf - 1 && f.p.y <= surf && (best == nil || surf > best!.y) { best = (li, col, surf) }
+                }
+                if let b = best {
+                    deposit(b.li, col: b.col, amount: f.r * f.r * 0.06)
+                    landed = true
+                }
             }
+            if landed || f.p.y < -10 || f.p.x < -80 || f.p.x > bounds.width + 80 { f = spawn() }
             flakes[i] = f
         }
 
-        relaxPile(tilt: tilt, dt: dt)
-        height = height.map { min(max($0 - dt * (0.35 + $0 * 0.03), 0), maxPile) } // melt faster when deep, hard cap
-    }
-
-    func setShelf(_ r: CGRect) {
-        guard abs(r.minX - shelf.minX) > 1 || abs(r.width - shelf.width) > 1 || abs(r.maxY - shelf.maxY) > 1 else { return }
-        let newCount = max(Int(r.width / cell), 1)
-        var nh = Array(repeating: CGFloat(0), count: newCount)
-        for (i, h) in height.enumerated() {
-            let j = Int((shelf.minX + CGFloat(i) * cell - r.minX) / cell)
-            if j >= 0 && j < newCount { nh[j] = h }
+        for li in ledges.indices {
+            relax(li, tilt: tilt)
+            let cap = ledges[li].maxPile
+            for c in ledges[li].height.indices {
+                let h = ledges[li].height[c]
+                ledges[li].height[c] = ledges[li].mask[c] ? 0 : min(max(h - dt * (0.05 + h * 0.004), 0), cap)  // slow melt
+            }
         }
-        shelf = r; height = nh
     }
 
-    func deposit(col: Int, amount: CGFloat) {
-        height[col] += amount
-        if col > 0 { height[col - 1] += amount * 0.3 }
-        if col < height.count - 1 { height[col + 1] += amount * 0.3 }
+    func deposit(_ li: Int, col: Int, amount: CGFloat) {
+        let n = ledges[li].height.count
+        ledges[li].height[col] += amount
+        if col > 0 { ledges[li].height[col - 1] += amount * 0.3 }
+        if col < n - 1 { ledges[li].height[col + 1] += amount * 0.3 }
     }
 
     /// Sand-pile relaxation. Tilt lowers the angle of repose downhill and raises it uphill.
-    func relaxPile(tilt: CGFloat, dt: CGFloat) {
-        let n = height.count
+    private func relax(_ li: Int, tilt: CGFloat) {
+        let n = ledges[li].height.count
         guard n > 1 else { return }
-        let repose: CGFloat = 1.6 * cell / 3            // max stable step between neighbours
-        let bias = tilt * 9                             // tilt -> sideways drive
+        let repose: CGFloat = 1.6
+        let bias = tilt * 9
+        var h = ledges[li].height
+        let mask = ledges[li].mask
         for _ in 0..<4 {
             let order: [Int] = tilt >= 0 ? Array(0..<n - 1) : Array((0..<n - 1).reversed())
-            for i in order {
-                let diff = height[i] - height[i + 1] + bias   // >0 wants to move right
+            for i in order where !mask[i] && !mask[i + 1] {
+                let diff = h[i] - h[i + 1] + bias
                 if diff > repose {
-                    let m = min((diff - repose) * 0.25, height[i]); height[i] -= m; height[i + 1] += m
+                    let m = min((diff - repose) * 0.25, h[i]); h[i] -= m; h[i + 1] += m
                 } else if diff < -repose {
-                    let m = min((-diff - repose) * 0.25, height[i + 1]); height[i + 1] -= m; height[i] += m
+                    let m = min((-diff - repose) * 0.25, h[i + 1]); h[i + 1] -= m; h[i] += m
                 }
             }
-            // spill over the ends when tilted
-            spill(at: 0, dir: -1, drive: -bias - height[0] * 0.2)
-            spill(at: n - 1, dir: 1, drive: bias - height[n - 1] * 0.2)
+            ledges[li].height = h
+            spill(li, at: 0, dir: -1, drive: -bias - h[0] * 0.2)
+            spill(li, at: n - 1, dir: 1, drive: bias - h[n - 1] * 0.2)
+            h = ledges[li].height
         }
-        // edges always shed a little (snow can't hang off the shelf)
-        for i in [0, n - 1] where height[i] > 4 { spill(at: i, dir: i == 0 ? -1 : 1, drive: (height[i] - 4) * 0.5) }
+        for i in [0, n - 1] where h[i] > 4 { spill(li, at: i, dir: i == 0 ? -1 : 1, drive: (h[i] - 4) * 0.5) }
     }
 
-    private func spill(at i: Int, dir: CGFloat, drive: CGFloat) {
-        guard drive > 0.5, height[i] > 0.3 else { return }
-        let m = min(drive * 0.3, height[i]); height[i] -= m
-        let x = shelf.minX + CGFloat(i) * cell + (dir > 0 ? cell : 0)
-        for _ in 0..<min(Int(ceil(m * 0.6)), 3) { launch(at: CGPoint(x: x, y: pileTop + height[i]), v: CGVector(dx: dir * .random(in: 40...120), dy: .random(in: -10...40))) }
+    private func spill(_ li: Int, at i: Int, dir: CGFloat, drive: CGFloat) {
+        let L = ledges[li]
+        guard drive > 0.5, L.height[i] > 0.3 else { return }
+        let m = min(drive * 0.3, L.height[i]); ledges[li].height[i] -= m
+        let x = L.rect.minX + CGFloat(i) * cell + (dir > 0 ? cell : 0)
+        for _ in 0..<min(Int(ceil(m * 0.6)), 3) {
+            launch(at: CGPoint(x: x, y: L.top + ledges[li].height[i]), v: CGVector(dx: dir * .random(in: 40...120), dy: .random(in: -10...40)))
+        }
     }
 
     func launch(at p: CGPoint, v: CGVector) {
         guard let i = flakes.indices.min(by: { flakes[$0].p.y > flakes[$1].p.y }) else { return }
         var f = Flake(p: p, v: v, r: .random(in: 2...4.5), phase: .random(in: 0...6.28))
-        f.depth = 0.6; f.spin = .random(in: -6...6)    // clumps tumble fast
+        f.depth = 0.6; f.spin = .random(in: -6...6)
         flakes[i] = f
     }
 
-    /// Twinkling glints on the pile surface.
+    /// Twinkling glints on pile surfaces.
     func sparkles() -> [(p: CGPoint, a: CGFloat)] {
         var out: [(p: CGPoint, a: CGFloat)] = []
-        for i in stride(from: 0, to: height.count, by: 3) where height[i] > 2 {
-            let hash = sin(CGFloat(i) * 91.7) * 4375.85
-            let ph = hash - floor(hash)
-            let tw = max(0, sin(t * (1.5 + ph * 3) + ph * 40))
-            guard tw > 0.92 else { continue }
-            out.append((CGPoint(x: shelf.minX + CGFloat(i) * cell + cell / 2, y: pileTop + height[i] - ph * min(height[i], 8)), (tw - 0.92) / 0.08))
+        for (li, L) in ledges.enumerated() {
+            for i in stride(from: 0, to: L.height.count, by: 3) where L.height[i] > 2 {
+                let hash = sin(CGFloat(i + li * 977) * 91.7) * 4375.85
+                let ph = hash - floor(hash)
+                let tw = max(0, sin(t * (1.5 + ph * 3) + ph * 40))
+                guard tw > 0.92 else { continue }
+                out.append((CGPoint(x: L.rect.minX + CGFloat(i) * cell + cell / 2, y: L.top + L.height[i] - ph * min(L.height[i], 8)), (tw - 0.92) / 0.08))
+            }
         }
         return out
     }
 
-    /// Shake: throw part of the pile into the air.
+    /// Shake: throw part of every pile into the air.
     func shake(strength: CGFloat) {
         let frac = min(0.3 + strength * 0.4, 0.95)
-        for i in height.indices where height[i] > 0.5 {
-            let m = height[i] * frac; height[i] -= m
-            let x = shelf.minX + CGFloat(i) * cell
-            for _ in 0..<min(Int(m / 3), 2) {
-                launch(at: CGPoint(x: x, y: pileTop + height[i]),
-                       v: CGVector(dx: .random(in: -120...120), dy: .random(in: 80...320) * strength))
+        for li in ledges.indices {
+            for i in ledges[li].height.indices where ledges[li].height[i] > 0.5 {
+                let m = ledges[li].height[i] * frac; ledges[li].height[i] -= m
+                let x = ledges[li].rect.minX + CGFloat(i) * cell
+                for _ in 0..<min(Int(m / 3), 2) {
+                    launch(at: CGPoint(x: x, y: ledges[li].top + ledges[li].height[i]),
+                           v: CGVector(dx: .random(in: -120...120), dy: .random(in: 80...320) * strength))
+                }
             }
         }
+    }
+
+    func fill() {
+        for li in ledges.indices {
+            for c in ledges[li].height.indices where !ledges[li].mask[c] {
+                ledges[li].height[c] = ledges[li].maxPile * 0.8 + .random(in: 0...2)
+            }
+        }
+    }
+}
+
+// MARK: - Windows
+
+enum Windows {
+    /// On-screen app windows, front to back, in view coordinates. No Screen Recording needed for bounds.
+    static func list(screen: NSScreen) -> [(id: Int, rect: CGRect)] {
+        let H = screen.frame.height
+        let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
+        let me = Int(ProcessInfo.processInfo.processIdentifier)
+        guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+        var out: [(Int, CGRect)] = []
+        for w in info {
+            guard (w[kCGWindowLayer as String] as? Int) == 0,
+                  (w[kCGWindowOwnerPID as String] as? Int) != me,
+                  (w[kCGWindowAlpha as String] as? Double ?? 1) > 0.1,
+                  let id = w[kCGWindowNumber as String] as? Int,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = b["X"], let y = b["Y"], let ww = b["Width"], let hh = b["Height"],
+                  ww >= 120, hh >= 80,
+                  y >= menuBar - 1                                  // skip true full-screen windows (top at y = 0)
+            else { continue }
+            // view coords: origin bottom-left; zero-height rect whose maxY is the window's top edge
+            out.append((id, CGRect(x: x - screen.frame.minX, y: H - y, width: ww, height: 0)))
+        }
+        return out
     }
 }
 
@@ -504,19 +618,22 @@ final class SnowView: MTKView, MTKViewDelegate {
             inst[k] = SpriteInstance(pos: SIMD2(Float(sp.p.x), Float(sp.p.y)), size: 12, rot: .pi / 2, squash: 0.08, alpha: Float(sp.a), sprite: 8); k += 1
         }
 
-        // --- pile strip (lightly smoothed)
-        let h = sim.height, n = h.count
+        // --- pile strips, one per ledge (lightly smoothed)
         let pv = pileBuf.contents().bindMemory(to: PileVertex.self, capacity: 8192)
         var pc = 0
-        let peak = max(h.max() ?? 0, 1)
-        if peak > 0.3 && n * 2 <= 8192 {
+        var strips: [(start: Int, count: Int)] = []
+        for L in sim.ledges {
+            let h = L.height, n = h.count
+            guard (h.max() ?? 0) > 0.3, pc + n * 2 <= 8192 else { continue }
+            let start = pc
+            let base = Float(L.top)
             for i in 0..<n {
-                let hs = (h[max(i - 1, 0)] + 2 * h[i] + h[min(i + 1, n - 1)]) / 4
-                let x = Float(sim.shelf.minX + CGFloat(i) * sim.cell + sim.cell / 2)
-                let base = Float(sim.pileTop)
+                let hs = L.mask[i] ? 0 : (h[max(i - 1, 0)] + 2 * h[i] + h[min(i + 1, n - 1)]) / 4
+                let x = Float(L.rect.minX + CGFloat(i) * sim.cell + sim.cell / 2)
                 pv[pc] = PileVertex(pos: SIMD2(x, base), frac: 0); pc += 1
                 pv[pc] = PileVertex(pos: SIMD2(x, base + Float(hs)), frac: hs > 0.2 ? 1 : 0); pc += 1
             }
+            strips.append((start, pc - start))
         }
 
         guard let rpd = currentRenderPassDescriptor, let drawable = currentDrawable,
@@ -532,7 +649,7 @@ final class SnowView: MTKView, MTKViewDelegate {
         if pc > 0 {
             enc.setRenderPipelineState(pilePSO)
             enc.setVertexBuffer(pileBuf, offset: 0, index: 0)
-            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: pc)
+            for st in strips { enc.drawPrimitives(type: .triangleStrip, vertexStart: st.start, vertexCount: st.count) }
             enc.setRenderPipelineState(spritePSO)
             enc.setVertexBuffer(instBuf, offset: 0, index: 0)
         }
@@ -561,6 +678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var view: SnowView!
     var status: NSStatusItem!
+    var dock: CGRect = .zero
 
     func applicationDidFinishLaunching(_ n: Notification) {
         guard let screen = NSScreen.main else { return }
@@ -573,7 +691,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.hasShadow = false
 
         view = SnowView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        view.sim = SnowSim(bounds: view.bounds, shelf: Dock.shelf(screen: screen), count: 260)
+        view.sim = SnowSim(bounds: view.bounds, count: 273)
+        view.sim.sync(dock: Dock.shelf(screen: screen), windows: Windows.list(screen: screen))
         window.contentView = view
         window.orderFrontRegardless()
         view.start()
@@ -588,7 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Cycle tilt axis", action: #selector(cycleAxis), keyEquivalent: "a")
         menu.addItem(withTitle: "Invert tilt", action: #selector(invert), keyEquivalent: "i")
         menu.addItem(withTitle: "Shake now", action: #selector(shake), keyEquivalent: "s")
-        menu.addItem(withTitle: "Dump snow on Dock", action: #selector(fill), keyEquivalent: "f")
+        menu.addItem(withTitle: "Dump snow on Dock + windows", action: #selector(fill), keyEquivalent: "f")
         menu.addItem(withTitle: "Toggle HUD", action: #selector(hud), keyEquivalent: "h")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -596,19 +715,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.menu = menu
 
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
-        // re-measure the Dock every 2 s (apps open/close, permission granted later)
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+        // re-measure Dock + windows 4x a second (windows move, apps open/close)
+        var tick = 0
+        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self, let sc = NSScreen.main else { return }
-            self.view.sim.setShelf(Dock.shelf(screen: sc))
+            tick += 1
+            if tick % 8 == 0 || self.dock == .zero { self.dock = Dock.shelf(screen: sc) }   // AX query is slower; every 2 s
+            self.view.sim.sync(dock: self.dock, windows: Windows.list(screen: sc))
         }
-        print("Shelf:", view.sim.shelf)
     }
 
     @objc func calibrate() { Motion.shared.calibrate() }
     @objc func cycleAxis() { Motion.shared.axis = (Motion.shared.axis + 1) % 3 }
     @objc func invert() { Motion.shared.sign *= -1 }
     @objc func shake() { view.sim.shake(strength: 1.5) }
-    @objc func fill() { for i in view.sim.height.indices { view.sim.height[i] += 14 + .random(in: 0...4) } }
+    @objc func fill() { view.sim.fill() }
     @objc func hud() { view.showHUD.toggle() }
 }
 
