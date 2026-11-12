@@ -43,6 +43,7 @@ When SnowDock asks for **Accessibility** access, allow it. It only uses this to 
 | ❄️ **Real crystals** | Dendrites, stellar plates, sectored and hex plates, modelled as 3D meshes in Blender and rendered as translucent ice |
 | 🏔 **Snow that piles up** | Flakes settle on the Dock and on top of your windows, build into drifts and spill off the ends. Snow never melts on its own: a drift melts away once it reaches 10% of the screen height, or when you tilt, shake or melt it from the menu |
 | 📏 **Fits your Dock** | The landing area tracks the Dock's real size every second as apps open and close |
+| 🧝 **Elfy** | A tiny 3D elf modelled and animated in Blender. Choose **Let Elfy clean your Dock**: he pops up, shovels the snow from one end of the Dock to the other and off the edge, waves goodbye and vanishes |
 | 🪟 **Window snow** | Drag a window and its snow slides off; close it and the snow falls. Windows in front hide the snow behind them |
 | 📐 **Tilt physics** | Tilt your MacBook and the drift slides downhill and pours off the edge |
 | 💥 **Shake** | Knock the laptop and the snow flies up |
@@ -50,7 +51,7 @@ When SnowDock asks for **Accessibility** access, allow it. It only uses this to 
 | ⚡️ **Light** | Drawn with Metal, using about 5% of one CPU core |
 | 🖱 **Click-through** | Never gets in the way of your mouse or windows |
 
-The ❄︎ menu bar item has **Calibrate flat**, **Cycle tilt axis**, **Invert tilt**, **Shake now**, **Dump snow on Dock + windows**, **Melt snow**, **Clear snow now**, **Toggle HUD** and **Quit**.
+The ❄︎ menu bar item has **Calibrate flat**, **Cycle tilt axis**, **Invert tilt**, **Shake now**, **Let Elfy clean your Dock**, **Dump snow on Dock + windows**, **Melt snow**, **Clear snow now**, **Toggle HUD** and **Quit**.
 
 ## Requirements
 
@@ -80,6 +81,8 @@ Sources/SnowDock.swift     app: overlay window, Metal renderer, snow + pile phys
 Resources/flakes/          Blender-rendered crystal sprites (bundled into the app)
 blender/make_flakes.py     procedural crystal generator (Blender, headless)
 blender/flakes.blend       the crystal models, for hand editing
+blender/make_elfy.py       Elfy: model, animation, sprite-sheet render
+Resources/elfy/            Elfy's sprite sheet
 tools/make_icon.swift      builds the app icon and README banner from a rendered flake
 tools/probe.swift          lists your Mac's motion sensors and prints live readings
 packaging/                 Info.plist, AppIcon.icns
