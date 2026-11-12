@@ -7,6 +7,7 @@
   <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-1f2a44?logo=apple">
   <img alt="Universal" src="https://img.shields.io/badge/Apple%20Silicon%20%2B%20Intel-universal-1f2a44">
   <img alt="Swift" src="https://img.shields.io/badge/Swift-Metal-f05138?logo=swift&logoColor=white">
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b6fd8"></a>
 </p>
 
 <p align="center">
@@ -139,3 +140,7 @@ Quit it from ❄︎ and drag `/Applications/SnowDock.app` to the Trash.
 - [ ] Settings panel (density, wind, melt speed)
 - [ ] GPU simulation with 50k+ flakes and real depth-of-field blur
 - [ ] Lid-angle fallback for Macs without an accelerometer
+
+## License
+
+[MIT](LICENSE) © 2026 Asta39
