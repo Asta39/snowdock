@@ -500,7 +500,7 @@ enum Windows {
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = b["X"], let y = b["Y"], let ww = b["Width"], let hh = b["Height"],
                   ww >= 120, hh >= 80,
-                  y >= menuBar - 1                                  // skip true full-screen windows (top at y = 0)
+                  y >= menuBar + 24                                 // skip windows whose top hugs the menu bar: snow there shows through the translucent bar as a white band
             else { continue }
             // view coords: origin bottom-left; zero-height rect whose maxY is the window's top edge
             out.append((id, CGRect(x: x - screen.frame.minX, y: H - y, width: ww, height: 0)))
