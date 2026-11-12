@@ -307,12 +307,12 @@ final class SnowSim {
 
     /// Replace the set of surfaces. Ledges keep their snow if they didn't move;
     /// a moved or closed window sheds its snow as falling clumps.
-    func sync(dock: CGRect, windows: [(id: Int, rect: CGRect)]) {
+    func sync(dock: CGRect, windows: [(id: Int, rect: CGRect, collects: Bool)]) {
         var wanted: [(Int, CGRect, CGFloat)] = []
         let dockTrigger = bounds.height * 0.10              // Dock drift melts once it reaches 10% of screen height
         let windowTrigger = max(bounds.height * 0.02, 12)  // window tops: smaller, so content stays visible
         if dock.width > 0 { wanted.append((-1, CGRect(x: dock.minX, y: dock.minY, width: dock.width, height: dock.height - 2), dockTrigger)) }
-        for w in windows { wanted.append((w.id, w.rect, windowTrigger)) }
+        for w in windows where w.collects { wanted.append((w.id, w.rect, windowTrigger)) }
 
         var next: [Ledge] = []
         for (id, rect, cap) in wanted {
@@ -348,8 +348,10 @@ final class SnowSim {
             let myZ = L.isDock ? -1 : (order.firstIndex(of: L.id) ?? Int.max)
             let front = L.isDock ? [] : windows.prefix(max(myZ, 0)).map(\.rect)
             for c in L.height.indices {
-                let p = CGPoint(x: L.rect.minX + (CGFloat(c) + 0.5) * cell, y: L.top + 1)
-                if front.contains(where: { $0.contains(p) }) { next[li].mask[c] = true; next[li].height[c] = 0 }
+                // hide the column if a window in front covers any part of where its drift would be
+                let x = L.rect.minX + (CGFloat(c) + 0.5) * cell
+                let span = CGRect(x: x, y: L.top, width: 0.01, height: L.maxPile + 2)
+                if front.contains(where: { $0.intersects(span) }) { next[li].mask[c] = true }   // hidden, not removed: snow stays on the window
             }
         }
         ledges = next
@@ -410,7 +412,7 @@ final class SnowSim {
             let rate = ledges[li].melting ? max(peak, 4) / 6 : 0
             for c in ledges[li].height.indices {
                 let h = ledges[li].height[c]
-                ledges[li].height[c] = ledges[li].mask[c] ? 0 : min(max(h - dt * rate, 0), cap)
+                ledges[li].height[c] = min(max(h - dt * rate, 0), cap)
             }
             if ledges[li].melting && peak < 0.3 { ledges[li].melting = false }
         }
@@ -473,7 +475,7 @@ final class SnowSim {
     func sparkles() -> [(p: CGPoint, a: CGFloat)] {
         var out: [(p: CGPoint, a: CGFloat)] = []
         for (li, L) in ledges.enumerated() {
-            for i in stride(from: 0, to: L.height.count, by: 3) where L.height[i] > 2 {
+            for i in stride(from: 0, to: L.height.count, by: 3) where L.height[i] > 2 && !L.mask[i] {
                 let hash = sin(CGFloat(i + li * 977) * 91.7) * 4375.85
                 let ph = hash - floor(hash)
                 let tw = max(0, sin(t * (1.5 + ph * 3) + ph * 40))
@@ -594,12 +596,13 @@ final class SnowSim {
 
 enum Windows {
     /// On-screen app windows, front to back, in view coordinates. No Screen Recording needed for bounds.
-    static func list(screen: NSScreen) -> [(id: Int, rect: CGRect)] {
+    /// `collects` is false for windows whose top hugs the menu bar: they still hide snow behind them but get none themselves.
+    static func list(screen: NSScreen) -> [(id: Int, rect: CGRect, collects: Bool)] {
         let H = screen.frame.height
         let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
         let me = Int(ProcessInfo.processInfo.processIdentifier)
         guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
-        var out: [(Int, CGRect)] = []
+        var out: [(Int, CGRect, Bool)] = []
         for w in info {
             guard (w[kCGWindowLayer as String] as? Int) == 0,
                   (w[kCGWindowOwnerPID as String] as? Int) != me,
@@ -608,10 +611,12 @@ enum Windows {
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = b["X"], let y = b["Y"], let ww = b["Width"], let hh = b["Height"],
                   ww >= 120, hh >= 80,
-                  y >= menuBar + 24                                 // skip windows whose top hugs the menu bar: snow there shows through the translucent bar as a white band
+                  y > 1                                             // skip true full-screen spaces
             else { continue }
             // view coords: origin bottom-left; zero-height rect whose maxY is the window's top edge
-            out.append((id, CGRect(x: x - screen.frame.minX, y: H - y, width: ww, height: 0)))
+            // full window rect in view coords (origin bottom-left); maxY is the top edge.
+            // Windows right under the menu bar don't collect snow: it would show through the translucent bar.
+            out.append((id, CGRect(x: x - screen.frame.minX, y: H - y - hh, width: ww, height: hh), y >= menuBar + 24))
         }
         return out
     }
