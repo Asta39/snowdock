@@ -140,6 +140,36 @@ struct Flake {
     var catchesWindows = false                           // only some flakes settle on window tops; the rest fall past to the Dock
 }
 
+// MARK: - Elfy
+
+struct Elf {
+    enum Phase { case appear, push, wave, leave }
+    static let size: CGFloat = 30          // on-screen sprite size in points (he's tiny)
+    static let speed: CGFloat = 34         // points per second while shovelling
+    static let stride: CGFloat = 3.2       // points walked per animation frame
+    static let demo = CommandLine.arguments.contains("--elfy-demo")   // fill the Dock and summon Elfy at launch (testing)
+    var x: CGFloat, y: CGFloat
+    var phase = Phase.appear
+    var t: CGFloat = 0
+    var alpha: CGFloat = 0
+    var frame = 12
+    var walked: CGFloat = 0
+    var cleared = 0                        // Dock columns already shovelled
+    var barrier: Int?                      // column at the blade; snow can't relax back past it
+}
+
+/// Finds bundled resources whether running as SnowDock.app or a bare binary next to Resources/.
+enum Assets {
+    static func url(_ rel: String) -> URL? {
+        var dirs: [URL] = []
+        if let r = Bundle.main.resourceURL { dirs.append(r) }
+        let exe = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+        dirs.append(exe.appendingPathComponent("Resources"))
+        dirs.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources"))
+        return dirs.map { $0.appendingPathComponent(rel) }.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+}
+
 // MARK: - Crystal sprites (procedural six-fold dendrites, pre-rendered once)
 
 enum Sprites {
@@ -369,13 +399,14 @@ final class SnowSim {
             flakes[i] = f
         }
 
+        stepElf(dt: dt)
         for li in ledges.indices {
             relax(li, tilt: tilt)
             // No melt over time. A drift only melts once it reaches its trigger height
             // (or from the menu); then it melts down completely over ~6 s.
             let cap = ledges[li].maxPile
             let peak = ledges[li].height.max() ?? 0
-            if !ledges[li].melting && peak >= cap { ledges[li].melting = true }
+            if !ledges[li].melting && peak >= cap && !(ledges[li].isDock && elf != nil) { ledges[li].melting = true }
             let rate = ledges[li].melting ? max(peak, 4) / 6 : 0
             for c in ledges[li].height.indices {
                 let h = ledges[li].height[c]
@@ -402,7 +433,8 @@ final class SnowSim {
         let mask = ledges[li].mask
         for _ in 0..<4 {
             let order: [Int] = tilt >= 0 ? Array(0..<n - 1) : Array((0..<n - 1).reversed())
-            for i in order where !mask[i] && !mask[i + 1] {
+            let wall = (ledges[li].isDock ? elf?.barrier : nil) ?? -1      // snow can't flow back past Elfy's shovel
+            for i in order where !mask[i] && !mask[i + 1] && i + 1 != wall {
                 let diff = h[i] - h[i + 1] + bias
                 if diff > repose {
                     let m = min((diff - repose) * 0.25, h[i]); h[i] -= m; h[i + 1] += m
@@ -467,6 +499,82 @@ final class SnowSim {
         }
     }
 
+    // MARK: Elfy
+
+    var elf: Elf?
+
+    /// Elfy pops up at the left end of the Dock, shovels all the snow to the right
+    /// end and off the edge, waves goodbye and vanishes.
+    func summonElf() -> Bool {
+        guard elf == nil, let dock = ledges.first(where: { $0.isDock }) else { return false }
+        elf = Elf(x: dock.rect.minX + Elf.size * 0.3, y: dock.top)
+        puff(at: CGPoint(x: elf!.x, y: dock.top + 8))
+        return true
+    }
+
+    private func stepElf(dt: CGFloat) {
+        guard var e = elf, let li = ledges.firstIndex(where: { $0.isDock }) else { elf = nil; return }
+        let L = ledges[li]
+        e.t += dt
+        e.y = L.top
+        switch e.phase {
+        case .appear:
+            e.alpha = min(e.t / 0.5, 1); e.frame = 12
+            if e.t >= 0.6 { e.phase = .push; e.t = 0 }
+        case .push:
+            e.x += Elf.speed * dt
+            e.walked += Elf.speed * dt
+            e.frame = Int(e.walked / Elf.stride) % 12
+            // shovel blade sits in front of him; everything behind it gets pushed ahead
+            let bladeX = e.x + Elf.size * 0.24
+            let bladeCol = min(Int((bladeX - L.rect.minX) / cell), L.height.count)
+            if bladeCol > e.cleared {
+                var load: CGFloat = 0
+                for c in max(e.cleared, 0)..<bladeCol where c < L.height.count { load += ledges[li].height[c]; ledges[li].height[c] = 0 }
+                e.cleared = bladeCol
+                if bladeCol < L.height.count {
+                    // mound up in front of the blade (spread over a few columns so it looks like a scoop)
+                    let span = min(4, L.height.count - bladeCol)
+                    for j in 0..<span { ledges[li].height[bladeCol + j] += load * [0.4, 0.3, 0.2, 0.1][j] / [0.4, 0.7, 0.9, 1.0][span - 1] }
+                } else {
+                    dumpOffEnd(load: load, x: L.rect.maxX, y: L.top)
+                }
+            }
+            e.barrier = bladeCol
+            if bladeX >= L.rect.maxX {
+                // shove the last of it off the end of the Dock
+                var rest: CGFloat = 0
+                for c in L.height.indices.suffix(8) { rest += ledges[li].height[c]; ledges[li].height[c] = 0 }
+                dumpOffEnd(load: rest, x: L.rect.maxX, y: L.top)
+                e.phase = .wave; e.t = 0; e.barrier = nil
+            }
+        case .wave:
+            e.frame = 12 + Int(e.t * 10) % 16
+            if e.t >= 2.6 { e.phase = .leave; e.t = 0 }
+        case .leave:
+            e.frame = 12 + Int((2.6 + e.t) * 10) % 16
+            e.alpha = max(1 - e.t / 0.5, 0)
+            if e.t >= 0.5 { puff(at: CGPoint(x: e.x, y: e.y + 8)); elf = nil; if Elf.demo { print("elfy: gone") }; return }
+        }
+        if Elf.demo, e.phase != elf?.phase { print("elfy:", e.phase, "x:", Int(e.x), "snow left:", Int(ledges[li].height.reduce(0, +))) }
+        elf = e
+    }
+
+    private func dumpOffEnd(load: CGFloat, x: CGFloat, y: CGFloat) {
+        guard load > 0.5 else { return }
+        for _ in 0..<min(Int(load / 3) + 1, 18) {
+            launch(at: CGPoint(x: x + .random(in: -4...4), y: y + .random(in: 2...14)),
+                   v: CGVector(dx: .random(in: 30...110), dy: .random(in: 10...70)))
+        }
+    }
+
+    private func puff(at p: CGPoint) {
+        for _ in 0..<8 {
+            launch(at: CGPoint(x: p.x + .random(in: -6...6), y: p.y + .random(in: -3...6)),
+                   v: CGVector(dx: .random(in: -50...50), dy: .random(in: 20...90)))
+        }
+    }
+
     /// Start melting every drift (menu action).
     func meltAll() { for li in ledges.indices { ledges[li].melting = true } }
 
@@ -513,14 +621,14 @@ enum Windows {
 
 struct SpriteInstance { var pos: SIMD2<Float>; var size: Float; var rot: Float; var squash: Float; var alpha: Float; var sprite: Float; var _pad: Float = 0 }
 struct PileVertex { var pos: SIMD2<Float>; var frac: Float; var _pad: Float = 0 }
-struct Uniforms { var screen: SIMD2<Float>; var time: Float; var _pad: Float = 0 }
+struct Uniforms { var screen: SIMD2<Float>; var time: Float; var cols: Float = 3; var rows: Float = 3; var _pad: Float = 0 }
 
 let shaderSource = """
 #include <metal_stdlib>
 using namespace metal;
 struct Inst { float2 pos; float size; float rot; float squash; float alpha; float sprite; float pad; };
 struct PV { float2 pos; float frac; float pad; };
-struct U { float2 screen; float time; float pad; };
+struct U { float2 screen; float time; float cols; float rows; float pad; };
 struct VO { float4 p [[position]]; float2 uv; float a; };
 struct PO { float4 p [[position]]; float frac; };
 
@@ -537,8 +645,8 @@ vertex VO sprite_vs(uint vid [[vertex_id]], uint iid [[instance_id]],
     float2 r = float2(local.x * co - local.y * s, local.x * s + local.y * co);
     VO o;
     o.p = ndc(i.pos + r, u.screen);
-    float col = fmod(i.sprite, 3.0), row = floor(i.sprite / 3.0);
-    o.uv = (float2(col, row) + (c + 0.5) * float2(1, -1) + float2(0, 1)) / 3.0;
+    float col = fmod(i.sprite, u.cols), row = floor(i.sprite / u.cols);
+    o.uv = (float2(col, row) + (c + 0.5) * float2(1, -1) + float2(0, 1)) / float2(u.cols, u.rows);
     o.a = i.alpha;
     return o;
 }
@@ -568,6 +676,7 @@ final class SnowView: MTKView, MTKViewDelegate {
     private var spritePSO: MTLRenderPipelineState!
     private var pilePSO: MTLRenderPipelineState!
     private var atlas: MTLTexture!
+    private var elfAtlas: MTLTexture?
     private var instBuf: MTLBuffer!
     private var pileBuf: MTLBuffer!
     private var last = CACurrentMediaTime()
@@ -597,6 +706,9 @@ final class SnowView: MTKView, MTKViewDelegate {
         spritePSO = pso("sprite_vs", "sprite_fs")
         pilePSO = pso("pile_vs", "pile_fs")
         atlas = makeAtlas(dev)
+        if let url = Assets.url("elfy/elfy_sheet.png") {
+            elfAtlas = try? MTKTextureLoader(device: dev).newTexture(URL: url, options: [.SRGB: false, .generateMipmaps: true, .textureStorageMode: MTLStorageMode.private.rawValue])
+        }
         instBuf = dev.makeBuffer(length: MemoryLayout<SpriteInstance>.stride * maxInstances, options: .storageModeShared)
         pileBuf = dev.makeBuffer(length: MemoryLayout<PileVertex>.stride * 8192, options: .storageModeShared)
 
@@ -703,6 +815,17 @@ final class SnowView: MTKView, MTKViewDelegate {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: k - far)
         }
         _ = sparkleStart
+
+        // Elfy: one sprite from his own 8x4 sheet, drawn in front of everything
+        if let e = sim.elf, let tex = elfAtlas, k < maxInstances {
+            inst[k] = SpriteInstance(pos: SIMD2(Float(e.x), Float(e.y + Elf.size * 0.4)), size: Float(Elf.size), rot: 0, squash: 1,
+                                     alpha: Float(e.alpha), sprite: Float(e.frame))
+            var ue = u; ue.cols = 8; ue.rows = 4
+            enc.setVertexBytes(&ue, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setVertexBufferOffset(k * stride, index: 0)
+            enc.setFragmentTexture(tex, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
+        }
         enc.endEncoding()
         cb.present(drawable); cb.commit()
     }
@@ -752,6 +875,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Invert tilt", action: #selector(invert), keyEquivalent: "i")
         menu.addItem(withTitle: "Shake now", action: #selector(shake), keyEquivalent: "s")
         menu.addItem(withTitle: "Dump snow on Dock + windows", action: #selector(fill), keyEquivalent: "f")
+        let elfItem = menu.addItem(withTitle: "Let Elfy clean your Dock", action: #selector(elfy), keyEquivalent: "e")
+        elfItem.isHidden = Assets.url("elfy/elfy_sheet.png") == nil
         menu.addItem(withTitle: "Melt snow", action: #selector(melt), keyEquivalent: "m")
         menu.addItem(withTitle: "Clear snow now", action: #selector(clear), keyEquivalent: "x")
         let ax = menu.addItem(withTitle: "Fit snow to Dock (grant Accessibility)…", action: #selector(grantAX), keyEquivalent: "")
@@ -763,6 +888,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.items.forEach { if $0.action != #selector(NSApplication.terminate(_:)) { $0.target = self } }
         status.menu = menu
 
+        runElfDemoIfAsked()
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
         // re-measure Dock + windows 4x a second (windows move, apps open/close)
         var tick = 0
@@ -783,12 +909,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
+    func runElfDemoIfAsked() {
+        guard Elf.demo else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.view.sim.fill()
+            print("elfy: summoned", self.view.sim.summonElf(), "dock:", self.view.sim.ledges.first(where: { $0.isDock })?.rect ?? .zero)
+        }
+    }
+    @objc func elfy() { _ = view.sim.summonElf() }
     @objc func melt() { view.sim.meltAll() }
     @objc func clear() { view.sim.clearAll() }
     @objc func fill() { view.sim.fill() }
     @objc func hud() { view.showHUD.toggle() }
 }
 
+setvbuf(stdout, nil, _IOLBF, 0)
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
